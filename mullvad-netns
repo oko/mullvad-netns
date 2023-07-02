@@ -24,6 +24,11 @@ if [[ "$nsname" == "$noparam" ]]; then
 	exit 1
 fi
 
+if [[ "$config" == "$noparam" ]]; then
+	error "please provide config file path as second argument"
+	exit 1
+fi
+
 source "${config}"
 public_key="$(wg pubkey <<< "$CONFIG_PRIVATE_KEY")"
 getclientaddrs "$CONFIG_ACCOUNT_ID" "$public_key"
