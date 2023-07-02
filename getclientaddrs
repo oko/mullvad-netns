@@ -1,0 +1,41 @@
+#!/bin/bash
+#
+# getclientaddrs: get Mullvad client IP addresses for an (account, pubkey) pair
+#
+# usage: getclientaddrs ACCOUNT_ID PUBKEY
+#
+# Must be run as root, caches to `/var/lib/mullvad-cache`
+#
+set -euo pipefail
+mullvad_account="$1"
+mullvad_pubkey="$2"
+
+if [[ $USER != root ]]; then
+	echo >&2 "must run as root"
+	exit 1
+fi
+
+datadir="/var/lib/mullvad-cache"
+infosum="$(echo "$mullvad_pubkey" | xargs | sha256sum | awk '{print $1}')"
+ipinfos="$datadir/ipinfos-${infosum}.json"
+ipinfots="$datadir/ipinfos.time"
+
+if [[ ! -d "$datadir" ]]; then
+	mkdir -p "$datadir"
+fi
+
+now="$(date '+%s')"
+if [[ -f "$ipinfots" ]]; then
+	ts="$(<"$ipinfots")"
+else
+	ts=0
+fi
+age="$(( now - ts ))"
+
+if [[ ! -f "$ipinfos" ]] || [[ $age -gt 3600 ]]; then
+	echo >&2 "downloading ipinfo data"
+	curl https://api.mullvad.net/wg/ -d account="$mullvad_account" --data-urlencode pubkey="$mullvad_pubkey" > "$ipinfos"
+	echo -n "$now" > "$ipinfots"
+fi
+
+cat "$ipinfos"

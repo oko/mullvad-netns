@@ -1,0 +1,63 @@
+#!/bin/bash
+set -euo pipefail
+set -x
+
+noparam="<none>"
+nsname="${1:-"$noparam"}"
+config="${2:-"$noparam"}"
+
+# https://github.com/ppo/bash-colors (v0.3.0)
+c() { [ $# == 0 ] && printf "\e[0m" || printf "$1" | sed 's/\(.\)/\1;/g;s/\([SDIUFNHT]\)/2\1/g;s/\([KRGYBMCW]\)/3\1/g;s/\([krgybmcw]\)/4\1/g;y/SDIUFNHTsdiufnhtKRGYBMCWkrgybmcw/12345789123457890123456701234567/;s/^\(.*\);$/\\e[\1m/g'; }
+cecho() { echo -e "$(c $1)${2}\e[0m"; }
+
+info() { echo -e "$(c SW)INFO:$(c) $1"; }
+warn() { echo -e "$(c SY)WARN:$(c) $1"; }
+error() { echo -e "$(c SR)ERROR:$(c) $1"; }
+
+if [[ $USER != root ]]; then
+	error "please run as root! exiting."
+	exit 1
+fi
+
+if [[ "$nsname" == "$noparam" ]]; then
+	error "please provide nsname as first argument"
+	exit 1
+fi
+
+source "${config}"
+public_key="$(wg pubkey <<< "$CONFIG_PRIVATE_KEY")"
+getclientaddrs "$CONFIG_ACCOUNT_ID" "$public_key"
+set +e
+IFS=',' read -ra addrs < <(getclientaddrs "$CONFIG_ACCOUNT_ID" "$public_key")
+set -e
+relay="$(getrelay)"
+relay_pubkey="$(jq -r .pubkey <<< "$relay")"
+relay_endpoint="$(jq -r .ipv4_addr_in <<< "$relay")"
+
+ip netns add "$nsname"
+delns() {
+	if ip netns list | grep "$nsname"; then
+	 	ip netns del "$nsname"
+	fi
+}
+trap delns EXIT HUP INT TERM
+info "created $nsname netns"
+
+ip link add wg0 type wireguard
+info "created wg0 interface in host namespace"
+ip link set wg0 netns "$nsname"
+info "relocated wg0 to $nsname namespace"
+for addr in "${addrs[@]}"; do
+	ip netns exec "$nsname" ip addr add "${addr}" dev wg0
+done
+ip netns exec "$nsname" wg set wg0 private-key <(echo "$CONFIG_PRIVATE_KEY")
+ip netns exec "$nsname" wg set wg0 peer "$relay_pubkey" endpoint "${relay_endpoint}:51820"
+ip netns exec "$nsname" wg set wg0 peer "$relay_pubkey" allowed-ips "0.0.0.0/0,::/0"
+ip netns exec "$nsname" ip link set up dev wg0
+ip netns exec "$nsname" ip addr add 127.0.0.1/8 dev lo
+ip netns exec "$nsname" ip link set up dev lo
+ip netns exec "$nsname" ip -4 route add default dev wg0
+ip netns exec "$nsname" ip -6 route add default dev wg0
+ip netns exec "$nsname" ip addr
+ip netns exec "$nsname" ping -c1 8.8.8.8
+sleep inf

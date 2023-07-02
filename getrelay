@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# getrelay: get filtered Mullvad relay data
+#
+# usage: getrelay
+#
+# This program writes relay JSON to /var/lib/mullvad-cache.
+# It is hardcoded to filter to DEN/CHI locations
+#
+set -euxo pipefail
+if [[ $USER != root ]]; then
+	echo >&2 "must run as root"
+	exit 1
+fi
+
+datadir="/var/lib/mullvad-cache"
+relays="$datadir/relays.json"
+relayts="$datadir/relays.time"
+
+if [[ ! -d "$datadir" ]]; then
+	mkdir -p "$datadir"
+fi
+
+now="$(date '+%s')"
+if [[ -f "$relayts" ]]; then
+	ts="$(<"$relayts")"
+else
+	ts=0
+fi
+age="$(( now - ts ))"
+
+if [[ ! -f "$relays" ]] || [[ $age -gt 3600 ]]; then
+	echo >&2 "downloading relay data"
+	curl -fsSL https://api.mullvad.net/www/relays/wireguard/ > "$relays"
+	echo -n "$now" > "$relayts"
+else
+	echo >&2 "relays.json does not need to be fetched"
+fi
+prog="$(mktemp)"
+cat <<-'EOF' > "$prog"
+[
+  .[]
+  | select(.city_code as $code | ["den", "chi"] | index($code))
+  | select((.status_messages | length) == 0)
+  | select(.network_port_speed > 1)
+] | (.|length) as $length | .[($rand | tonumber) % $length]
+EOF
+jq --arg rand "$RANDOM" -r -f "$prog" "$relays"
